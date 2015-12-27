@@ -59,8 +59,12 @@ class facet_node:
 
 class material:
     def __init__(self):
-        self.diffuse = (.0, .0, .0,.0)
+        self.diffuse = (.0, .0, .0, .0)
+        self.ambient = (.0, .0, .0, .0)
         self.specular = (.0, .0, .0, .0)
+
+    def __repr__(self):
+        return "(%f, %f, %f)" % (self.diffuse[0], self.diffuse[1], self.diffuse[2])
 
 
 def read_int(ifs, line = None):
@@ -79,6 +83,9 @@ def array_extend(arr, size):
 def sort_chain(chain):
     arr = []
 
+    # debug
+    chain = chain[:]
+
     link = chain[0]
     chain.remove(link)
     arr.append(link.begin_idx)
@@ -88,25 +95,25 @@ def sort_chain(chain):
         for link in chain:
             if link.begin_idx == tail_idx:
                 chain.remove(link)
+                arr.append(tail_idx)
                 if link.end_idx in arr:
                     return arr
                 else:
-                    arr.append(link.begin_idx)
                     tail_idx = link.end_idx
                     break
             elif link.end_idx == tail_idx:
                 chain.remove(link)
+                arr.append(tail_idx)
                 if link.begin_idx in arr:
                     return arr
-                if link.begin_idx not in arr:
-                    arr.append(link.end_idx)
+                else:
                     tail_idx = link.begin_idx
                     break
 
     if tail_idx != arr[0]:
         pprint.pprint(tail_idx)
         pprint.pprint(arr)
-        raise Exception("incorrect face chunk")
+        raise Exception("not a circular chain")
 
     # Can't happen
     raise Exception("CAN_NOT_HAPPEN")
@@ -141,10 +148,6 @@ class RokModel:
             n = [.0, .0, .0]
 
             vvx = fac.vec_vertex_idx
-
-            if len(vvx) < 3:
-                print("below triple")
-                continue
 
             for j in range(len(vvx)):
 
@@ -278,9 +281,15 @@ class RokModel:
             for i in range(num_vertex):
                 idx = read_int(ifs)
                 edge_line.append(self.vec_line[idx - 1])
-            current.vec_line_idx = edge_line
 
+            current.vec_line_idx = edge_line
             current.vec_vertex_idx = sort_chain(edge_line)
+
+            # debug
+            if len(current.vec_vertex_idx) < 3:
+                pprint.pprint(num_vertex)
+                pprint.pprint(edge_line)
+                pprint.pprint(current.vec_vertex_idx)
 
             self.vec_facet.append(current);
             cnt += 1
@@ -303,9 +312,14 @@ class RokModel:
             reserved = read_int(ifs)
 
             mat = material()
-            mat.diffuse = (  float(bri_r + drk_r) / 2.0 / 255.0
-                            ,float(bri_r + drk_g) / 2.0 / 255.0
-                            ,float(bri_r + drk_b) / 2.0 / 255.0 )
+            mat.specular = ( float(bri_r) / 255.0
+                            ,float(bri_r) / 255.0
+                            ,float(bri_r) / 255.0
+                            ,1.0 )
+            mat.diffuse = (  float(drk_r) / 255.0
+                            ,float(drk_g) / 255.0
+                            ,float(drk_b) / 255.0
+                            ,1.0  )
             self.vec_material.append(mat);
         return ifs.readline()
 
@@ -400,35 +414,39 @@ class RokModel:
 
     SelectedColor = (1.0, .0, .0, .0)
 
-    def render(b_poly, b_line, b_point, fSelect):
+    def render(self, b_poly = True, b_line = False, b_point = False):
         facet_normal = True
 
         glInitNames();
 
         # Poly
-        glPushName(SE_POLY);
+        #glPushName(SE_POLY);
 
-        if (b_poly == true):
+        if b_poly:
             glEnable(GL_LIGHTING);
-            glEnable(GL_POLYGON_OFFSET_FILL);
+            #glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(.5, 1.0);
 
             for fac in self.vec_facet:
-                glPushName(i);
+                #glPushName(i);
                 glBegin(GL_POLYGON);
 
                 if (fac.b_selected):
                     glMaterialfv(GL_FRONT, GL_DIFFUSE, SelectedColor)
                 else:
-                    glMaterialfv(GL_FRONT, GL_DIFFUSE, vec_material[fac.mat_id].diffuse)
+                    mat = self.vec_material[fac.mat_id]
+                    glMaterialfv(GL_FRONT, GL_SPECULAR, (GLfloat * 4)(*mat.specular))
+                    glMaterialfv(GL_FRONT, GL_DIFFUSE, (GLfloat * 4)(*mat.diffuse))
+                    glMaterialfv(GL_FRONT, GL_AMBIENT, (GLfloat * 4)(*mat.ambient))
 
                 if (facet_normal):
-                    glNormal3fv(fac.normal);
+                    glNormal3fv((GLfloat * 3)(*fac.normal))
 
                 for vi in fac.vec_vertex_idx:
                     if not facet_normal:
-                        glNormal3fv(idx2norm(vi))
-                    glVertex3fv(idx2pos(vi))
+                        glNormal3fv(self.idx2norm(vi))
+                    glVertex3fv((GLfloat * 3)(*self.idx2pos(vi)))
+                glVertex3fv((GLfloat * 3)(*self.idx2pos(fac.vec_vertex_idx[0])))
                 glEnd();
 
                 # reverse side
@@ -437,30 +455,31 @@ class RokModel:
                 if facet_normal:
                     glNormal3f(-fac.normal[0], -fac.normal[1], -fac.normal[2])
 
-                for vi in reverse(vec_vertex_idx):
+                rev_vec_vertex_idx = list(reversed(fac.vec_vertex_idx))
+                for vi in rev_vec_vertex_idx:
                     if not facet_normal:
                         n = idx2norm(vi)
                         glNormal3f(-n[0],
                                 -n[1],
                                 -n[2])
-                    glVertex3fv(idx2pos(vi))
-
+                    glVertex3fv((GLfloat * 3)(*self.idx2pos(vi)))
+                glVertex3fv((GLfloat * 3)(*self.idx2pos(rev_vec_vertex_idx[0])))
                 glEnd()
-                glPopName()
+                #glPopName()
 
-            glDisable(GL_POLYGON_OFFSET_FILL)
+            #glDisable(GL_POLYGON_OFFSET_FILL)
             glDisable(GL_LIGHTING)
 
-        glPopName()
+        #glPopName()
 
         # Line
-        glPushName(SE_LINE)
+        #glPushName(SE_LINE)
         # Lines
         if b_line:
             glDisable(GL_LIGHTING)
-            for ln in vec_line:
+            for ln in self.vec_line:
                 #glPassThrough(i);
-                glPushName(i);
+                #glPushName(i);
                 glBegin(GL_LINE_STRIP);
                 glLineWidth(ln.width);
 
@@ -469,28 +488,28 @@ class RokModel:
                         glColor3f(1.0, 0.0, 0.0);
                         glLineWidth(ln.width * 2.0);
                     else:
-                        glColor3fv(vec_material[ln.mat_id].diffuse);
+                        glColor3fv((GLfloat * 3)(*self.vec_material[ln.mat_id].diffuse))
                 else:
                     glColor3f(.5, .5, .5);
 
-                glVertex3fv(idx2pos(ln.begin_idx))
-                glVertex3fv(idx2pos(ln.end_idx))
+                glVertex3fv((GLfloat * 3)(*self.idx2pos(ln.begin_idx)))
+                glVertex3fv((GLfloat * 3)(*self.idx2pos(ln.end_idx)))
                 glEnd()
 
-                glPopName()
+                #glPopName()
 
             glEnable(GL_LIGHTING)
 
-        glPopName();
+        #glPopName();
 
         # Point
-        glPushName(SE_VERTEX)
+        #glPushName(SE_VERTEX)
         if b_point:
             glDisable(GL_LIGHTING)
 
             for i in range(len(vec_vertex)):
                 #glPassThrough(i);
-                glPushName(i);
+                #glPushName(i);
 
                 if vec_vertex[i].b_selected:
                     glPointSize(5.0);
@@ -510,9 +529,9 @@ class RokModel:
                 glVertex3fv(vec_vertex[i].pos)
                 glEnd()
 
-                glPopName()
+                #glPopName()
 
             glEnable(GL_LIGHTING);
 
-        glPopName();
+        #glPopName();
 # end of MeshObj
